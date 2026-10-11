@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./create-app": "./src/create-app.ts",
     "./json-file-store": "./src/json-file-store.ts"
   },
   "scripts": {
