@@ -161,107 +161,107 @@ describe('POST /inbox', () => {
     await eventually(() => expect(second.acks).toHaveLength(1));
     expect(await second.inbox()).toEqual(stored);
   });
+});
 
-  describe('chaos', () => {
-    it('offline: answers 503 GUEST_OFFLINE, stores nothing and sends no ACK', async () => {
-      const guest = await startGuest();
-      await guest.chaos({ offline: true });
+describe('chaos', () => {
+  it('offline: answers 503 GUEST_OFFLINE, stores nothing and sends no ACK', async () => {
+    const guest = await startGuest();
+    await guest.chaos({ offline: true });
 
-      const response = await guest.deliver();
-      await sleep(SETTLE_MS);
+    const response = await guest.deliver();
+    await sleep(SETTLE_MS);
 
-      expect(response.status).toBe(503);
-      expect(await errorCode(response)).toBe('GUEST_OFFLINE');
-      expect(await guest.inbox()).toEqual([]);
-      expect(guest.acks).toHaveLength(0);
+    expect(response.status).toBe(503);
+    expect(await errorCode(response)).toBe('GUEST_OFFLINE');
+    expect(await guest.inbox()).toEqual([]);
+    expect(guest.acks).toHaveLength(0);
 
-      await guest.chaos({ offline: false });
-      expect((await guest.deliver()).status).toBe(202);
-    });
-
-    it('dropNextAcks: stores the entry, skips that many ACKs, then acknowledges the next copy', async () => {
-      const guest = await startGuest();
-      await guest.chaos({ dropNextAcks: 1 });
-
-      const first = await guest.deliver();
-      await sleep(SETTLE_MS);
-
-      expect(first.status).toBe(202);
-      expect(await guest.inbox()).toHaveLength(1);
-      expect(guest.acks).toHaveLength(0);
-      expect(await (await fetch(`${guest.url}/chaos`)).json()).toMatchObject({ dropNextAcks: 0 });
-
-      await guest.deliver();
-      await eventually(() => expect(guest.acks).toHaveLength(1));
-      expect(await guest.inbox()).toHaveLength(1);
-    });
-
-    it('ackDelayMs: answers 202 at once and acknowledges after the delay', async () => {
-      const guest = await startGuest();
-      await guest.chaos({ ackDelayMs: 150 });
-
-      const response = await guest.deliver();
-
-      expect(response.status).toBe(202);
-      expect(guest.acks).toHaveLength(0);
-      await eventually(() => expect(guest.acks).toHaveLength(1));
-    });
-
-    it('close() cancels an ACK that is still waiting for its delay', async () => {
-      const guest = await startGuest();
-      await guest.chaos({ ackDelayMs: 50 });
-      await guest.deliver();
-
-      await guest.close();
-      await sleep(SETTLE_MS);
-
-      expect(guest.acks).toHaveLength(0);
-    });
-
-    it('merges settings, returns all of them, and rejects one it does not know', async () => {
-      const guest = await startGuest();
-
-      const merged = await guest.chaos({ ackDelayMs: 5 });
-      const unknown = await guest.chaos({ offlne: true });
-      const wrongType = await guest.chaos({ dropNextAcks: '1' });
-      const negative = await guest.chaos({ ackDelayMs: -1 });
-      const fraction = await guest.chaos({ dropNextAcks: 1.5 });
-
-      expect(await merged.json()).toEqual({ offline: false, dropNextAcks: 0, ackDelayMs: 5 });
-      expect(unknown.status).toBe(400);
-      expect(wrongType.status).toBe(400);
-      expect(negative.status).toBe(400);
-      expect(fraction.status).toBe(400);
-      expect(await errorCode(wrongType)).toBe('FST_ERR_VALIDATION');
-    });
+    await guest.chaos({ offline: false });
+    expect((await guest.deliver()).status).toBe(202);
   });
 
-  describe('other routes', () => {
-    it('serves Swagger UI at /docs and an OpenAPI document that lists every route', async () => {
-      const guest = await startGuest();
+  it('dropNextAcks: stores the entry, skips that many ACKs, then acknowledges the next copy', async () => {
+    const guest = await startGuest();
+    await guest.chaos({ dropNextAcks: 1 });
 
-      const ui = await fetch(`${guest.url}/docs`);
-      const openapi = (await (await fetch(`${guest.url}/docs/json`)).json()) as {
-        paths: Record<string, object>;
-      };
+    const first = await guest.deliver();
+    await sleep(SETTLE_MS);
 
-      expect(ui.status).toBe(200);
-      expect(
-        Object.entries(openapi.paths).map(([path, methods]) => [path, Object.keys(methods)]),
-      ).toEqual([
-        ['/health', ['get']],
-        ['/chaos', ['get', 'post']],
-        ['/inbox', ['get', 'post']],
-      ]);
-    });
+    expect(first.status).toBe(202);
+    expect(await guest.inbox()).toHaveLength(1);
+    expect(guest.acks).toHaveLength(0);
+    expect(await (await fetch(`${guest.url}/chaos`)).json()).toMatchObject({ dropNextAcks: 0 });
 
-    it('answers GET /health with 200 and an unknown route with 404', async () => {
-      const guest = await startGuest();
+    await guest.deliver();
+    await eventually(() => expect(guest.acks).toHaveLength(1));
+    expect(await guest.inbox()).toHaveLength(1);
+  });
 
-      const unknown = await fetch(`${guest.url}/nowhere`);
+  it('ackDelayMs: answers 202 at once and acknowledges after the delay', async () => {
+    const guest = await startGuest();
+    await guest.chaos({ ackDelayMs: 150 });
 
-      expect((await fetch(`${guest.url}/health`)).status).toBe(200);
-      expect(unknown.status).toBe(404);
-    });
+    const response = await guest.deliver();
+
+    expect(response.status).toBe(202);
+    expect(guest.acks).toHaveLength(0);
+    await eventually(() => expect(guest.acks).toHaveLength(1));
+  });
+
+  it('close() cancels an ACK that is still waiting for its delay', async () => {
+    const guest = await startGuest();
+    await guest.chaos({ ackDelayMs: 50 });
+    await guest.deliver();
+
+    await guest.close();
+    await sleep(SETTLE_MS);
+
+    expect(guest.acks).toHaveLength(0);
+  });
+
+  it('merges settings, returns all of them, and rejects one it does not know', async () => {
+    const guest = await startGuest();
+
+    const merged = await guest.chaos({ ackDelayMs: 5 });
+    const unknown = await guest.chaos({ offlne: true });
+    const wrongType = await guest.chaos({ dropNextAcks: '1' });
+    const negative = await guest.chaos({ ackDelayMs: -1 });
+    const fraction = await guest.chaos({ dropNextAcks: 1.5 });
+
+    expect(await merged.json()).toEqual({ offline: false, dropNextAcks: 0, ackDelayMs: 5 });
+    expect(unknown.status).toBe(400);
+    expect(wrongType.status).toBe(400);
+    expect(negative.status).toBe(400);
+    expect(fraction.status).toBe(400);
+    expect(await errorCode(wrongType)).toBe('FST_ERR_VALIDATION');
+  });
+});
+
+describe('other routes', () => {
+  it('serves Swagger UI at /docs and an OpenAPI document that lists every route', async () => {
+    const guest = await startGuest();
+
+    const ui = await fetch(`${guest.url}/docs`);
+    const openapi = (await (await fetch(`${guest.url}/docs/json`)).json()) as {
+      paths: Record<string, object>;
+    };
+
+    expect(ui.status).toBe(200);
+    expect(
+      Object.entries(openapi.paths).map(([path, methods]) => [path, Object.keys(methods)]),
+    ).toEqual([
+      ['/health', ['get']],
+      ['/chaos', ['get', 'post']],
+      ['/inbox', ['get', 'post']],
+    ]);
+  });
+
+  it('answers GET /health with 200 and an unknown route with 404', async () => {
+    const guest = await startGuest();
+
+    const unknown = await fetch(`${guest.url}/nowhere`);
+
+    expect((await fetch(`${guest.url}/health`)).status).toBe(200);
+    expect(unknown.status).toBe(404);
   });
 });
