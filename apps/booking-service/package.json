@@ -1,0 +1,19 @@
+{
+  "name": "@pentice/booking-service",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@fastify/error": "^4.2.1",
+    "@fastify/swagger": "^9.9.2",
+    "@fastify/swagger-ui": "^6.1.2",
+    "@pentice/shared": "workspace:*",
+    "async-mutex": "^0.5.0",
+    "close-with-grace": "^2.5.0",
+    "fastify": "^5.12.5",
+    "fastify-type-provider-zod": "^7.0.0",
+    "nanoid": "^6.0.2",
+    "write-file-atomic": "^8.0.0",
+    "zod": "^4.6.5"
+  }
+}
