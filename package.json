@@ -19,6 +19,8 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@pentice/booking-service": "workspace:*",
+    "@pentice/guest-simulator": "workspace:*",
+    "@pentice/shared": "workspace:*",
     "@types/node": "^24.19.2",
     "@vitest/coverage-v8": "^5.0.3",
     "esbuild": "^0.28.2",
