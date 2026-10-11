@@ -14,7 +14,10 @@
     "test": "vitest run",
     "verify": "pnpm lint && pnpm typecheck && pnpm test",
     "prepare": "husky",
-    "dev": "pnpm -r --parallel --if-present dev"
+    "dev": "pnpm -r --parallel --if-present dev",
+    "build": "pnpm -r --if-present build",
+    "smoke": "bash scripts/compose-smoke.sh",
+    "demo": "node scripts/demo.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
