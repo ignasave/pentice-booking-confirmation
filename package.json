@@ -13,7 +13,8 @@
     "typecheck": "pnpm -r --if-present typecheck && tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "verify": "pnpm lint && pnpm typecheck && pnpm test",
-    "prepare": "husky"
+    "prepare": "husky",
+    "dev": "pnpm -r --parallel --if-present dev"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
