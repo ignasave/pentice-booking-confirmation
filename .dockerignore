@@ -1,0 +1,13 @@
+# The images are built from manifests, the lockfile and src/ only.
+.git
+.github
+.husky
+**/node_modules
+**/dist
+**/data
+coverage
+docs
+tests
+scripts
+*.md
+.env*

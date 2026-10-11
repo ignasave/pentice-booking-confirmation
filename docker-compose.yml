@@ -1,0 +1,71 @@
+# One container per service and exactly one of each: a state file has a single writer, an
+# in-process mutex, so a second replica on the same volume would break code uniqueness.
+# Neither service has a restart policy: a service that exits because its state file is
+# corrupt must stay down until someone has looked at the file.
+name: pentice
+
+services:
+  booking-service:
+    build:
+      context: .
+      dockerfile: apps/booking-service/Dockerfile
+    ports:
+      - '3000:3000'
+    environment:
+      PORT: 3000
+      DATA_DIR: /data
+      GUEST_WEBHOOK_URL: http://guest-simulator:3001
+      # Tunables: a value from .env (see .env.example), or else the service's own default.
+      CODE_MAX_ATTEMPTS: ${CODE_MAX_ATTEMPTS:-10}
+      BACKOFF_BASE_MS: ${BACKOFF_BASE_MS:-1000}
+      BACKOFF_CAP_MS: ${BACKOFF_CAP_MS:-30000}
+      DELIVERY_TIMEOUT_MS: ${DELIVERY_TIMEOUT_MS:-5000}
+      ATTENTION_THRESHOLD: ${ATTENTION_THRESHOLD:-10}
+    volumes:
+      - booking-data:/data
+    healthcheck:
+      # The image has no curl; Node's own fetch does the request.
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:3000/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+      start_interval: 1s
+    # Longer than the 10 s a service allows itself to shut down, so it is never killed first.
+    stop_grace_period: 15s
+  guest-simulator:
+    build:
+      context: .
+      dockerfile: apps/guest-simulator/Dockerfile
+    ports:
+      - '3001:3001'
+    environment:
+      PORT: 3001
+      DATA_DIR: /data
+      BOOKING_SERVICE_URL: http://booking-service:3000
+    volumes:
+      - guest-data:/data
+    healthcheck:
+      # The image has no curl; Node's own fetch does the request.
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:3001/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+      start_interval: 1s
+    # Longer than the 10 s a service allows itself to shut down, so it is never killed first.
+    stop_grace_period: 15s
+
+volumes:
+  booking-data:
+  guest-data:
