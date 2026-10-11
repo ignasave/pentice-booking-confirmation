@@ -15,3 +15,14 @@ export const PersistenceUnavailable = createError<[{ cause: unknown }]>(
   'The change could not be saved',
   503,
 );
+export const InvalidCode = createError(
+  'INVALID_CODE',
+  'A confirmation code is 5 characters, each a lowercase letter or a digit',
+  400,
+);
+// The messages name no code and no token: Fastify logs the message of an error it answers.
+export const BookingNotFound = createError(
+  'BOOKING_NOT_FOUND',
+  'No booking has that confirmation code',
+  404,
+);

@@ -3,7 +3,12 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./config": "./src/config.ts",
+    "./server": "./src/server.ts"
+  },
   "scripts": {
+    "dev": "node --import tsx src/main.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
