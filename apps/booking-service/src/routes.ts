@@ -1,7 +1,14 @@
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { errorResponse } from '@pentice/shared/create-app';
 import { z } from 'zod';
-import { CODE_PATTERN, createBooking, findByCode } from './bookings';
+import {
+  acknowledgeDelivery,
+  CODE_PATTERN,
+  createBooking,
+  findByCode,
+  listBookings,
+} from './bookings';
+
 import type { BookingStore } from './bookings';
 import type { Config } from './config';
 import { BookingNotFound, InvalidCode } from './errors';
@@ -29,11 +36,33 @@ const lookupResponse = z.object({
   deliveryStatus,
 });
 
+const deliveriesResponse = z.object({
+  // No ack token, no confirmation code and no guest address.
+  deliveries: z.array(
+    z.object({
+      bookingId: z.string(),
+      reservationId: z.string(),
+      deliveryId: z.string(),
+      status: deliveryStatus,
+      attempts: z.number(),
+      acknowledgedAt: z.string().nullable(),
+      needsAttention: z.boolean(),
+    }),
+  ),
+  summary: z.object({
+    pending: z.number(),
+    acknowledged: z.number(),
+    oldestPendingAgeMs: z.number().nullable(),
+  }),
+});
+
 /** The HTTP API: each handler reads the request, calls `bookings.ts` and shapes the response. */
-export const routes: FastifyPluginAsyncZod<{ store: BookingStore; config: Config }> = async (
-  app,
-  { store, config },
-) => {
+export const routes: FastifyPluginAsyncZod<{
+  store: BookingStore;
+  config: Config;
+  /** Absent when no guest address is configured: bookings are saved and nothing is sent. */
+  startDelivery?: (bookingId: string) => void;
+}> = async (app, { store, config, startDelivery }) => {
   app.get(
     '/health',
     {
@@ -66,7 +95,11 @@ export const routes: FastifyPluginAsyncZod<{ store: BookingStore; config: Config
         request.body,
         config.CODE_MAX_ATTEMPTS,
       );
-      if (created) request.log.info({ bookingId: booking.bookingId }, 'Booking created');
+      if (created) {
+        request.log.info({ bookingId: booking.bookingId }, 'Booking created');
+        // The booking is saved, so the first attempt starts now and not on any schedule.
+        startDelivery?.(booking.bookingId);
+      }
       return reply.code(created ? 201 : 200).send({
         bookingId: booking.bookingId,
         reservationId: booking.reservationId,
@@ -93,6 +126,58 @@ export const routes: FastifyPluginAsyncZod<{ store: BookingStore; config: Config
       if (!booking) throw new BookingNotFound();
       // The response schema drops every key it does not declare.
       return { ...booking, deliveryStatus: booking.delivery.status };
+    },
+  );
+
+  app.post(
+    '/deliveries/:deliveryId/ack',
+    {
+      schema: {
+        summary: 'Acknowledge a delivery with its ack token as a Bearer credential',
+        params: z.object({ deliveryId: z.string() }),
+        response: {
+          204: z.undefined(),
+          401: errorResponse,
+          404: errorResponse,
+          503: errorResponse,
+        },
+      },
+    },
+    async (request, reply) => {
+      const token = /^Bearer +(.+)$/i.exec(request.headers.authorization ?? '')?.[1];
+      await acknowledgeDelivery(store, request.params.deliveryId, token);
+      request.log.info({ deliveryId: request.params.deliveryId }, 'Delivery acknowledged');
+      return reply.code(204).send();
+    },
+  );
+
+  app.get(
+    '/admin/deliveries',
+    {
+      schema: {
+        summary: 'List every delivery with its retry state',
+        response: { 200: deliveriesResponse },
+      },
+    },
+    async () => {
+      const bookings = await listBookings(store);
+      const pendingSince = bookings
+        .filter((b) => b.delivery.status === 'pending')
+        .map((b) => Date.parse(b.createdAt));
+      return {
+        // The response schema drops every key it does not declare.
+        deliveries: bookings.map(({ bookingId, reservationId, delivery }) => ({
+          bookingId,
+          reservationId,
+          ...delivery,
+        })),
+        summary: {
+          pending: pendingSince.length,
+          acknowledged: bookings.length - pendingSince.length,
+          oldestPendingAgeMs:
+            pendingSince.length === 0 ? null : Math.max(0, Date.now() - Math.min(...pendingSince)),
+        },
+      };
     },
   );
 };

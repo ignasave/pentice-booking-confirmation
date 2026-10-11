@@ -27,6 +27,12 @@ async function startService() {
   };
 }
 
+const ack = (url: string, deliveryId: string, authorization?: string) =>
+  fetch(`${url}/deliveries/${deliveryId}/ack`, {
+    method: 'POST',
+    headers: authorization === undefined ? {} : { authorization },
+  });
+
 describe('POST /bookings', () => {
   it('answers 201 without the confirmation code in the body or the headers', async () => {
     const { url, onDisk } = await startService();
@@ -122,6 +128,8 @@ describe('POST /bookings', () => {
 
     expect(response.status).toBe(503);
     expect(await errorCode(response)).toBe('PERSISTENCE_UNAVAILABLE');
+    const overview = await (await fetch(`${url}/admin/deliveries`)).json();
+    expect(overview).toMatchObject({ deliveries: [] });
   });
 });
 
@@ -178,6 +186,100 @@ describe('GET /:code', () => {
     expect(await response.json()).toMatchObject({ statusCode: 404, error: 'Not Found' });
   });
 });
+describe('POST /deliveries/:deliveryId/ack', () => {
+  async function startWithBooking() {
+    const service = await startService();
+    await postJson(`${service.url}/bookings`, ANA);
+    const [stored] = await service.onDisk();
+    return { ...service, ...stored!.delivery };
+  }
+
+  it('answers 204 for the valid token and marks the delivery acknowledged', async () => {
+    const { url, deliveryId, ackToken, onDisk } = await startWithBooking();
+
+    const response = await ack(url, deliveryId, `Bearer ${ackToken}`);
+
+    expect(response.status).toBe(204);
+    expect(await onDisk()).toMatchObject([{ delivery: { status: 'acknowledged' } }]);
+  });
+
+  it('answers 204 again for a repeat and keeps the first acknowledgedAt', async () => {
+    const { url, deliveryId, ackToken, onDisk } = await startWithBooking();
+    await ack(url, deliveryId, `Bearer ${ackToken}`);
+    const [first] = await onDisk();
+
+    const repeat = await ack(url, deliveryId, `bearer ${ackToken}`);
+
+    expect(repeat.status).toBe(204);
+    expect(await onDisk()).toEqual([first]);
+  });
+
+  it.each([
+    ['a wrong token of the right length', (token: string) => `Bearer ${'x'.repeat(token.length)}`],
+    ['a shorter token', () => 'Bearer short'],
+    ['a longer token', (token: string) => `Bearer ${token}extra`],
+    ['another scheme', (token: string) => `Basic ${token}`],
+    ['no Authorization header', () => undefined],
+  ])('answers 401 UNAUTHORIZED for %s and leaves the delivery pending', async (_case, header) => {
+    const { url, deliveryId, ackToken, onDisk } = await startWithBooking();
+
+    const response = await ack(url, deliveryId, header(ackToken));
+
+    expect(response.status).toBe(401);
+    expect(await errorCode(response)).toBe('UNAUTHORIZED');
+    expect(await onDisk()).toMatchObject([{ delivery: { status: 'pending' } }]);
+  });
+
+  it('answers 404 DELIVERY_NOT_FOUND for an unknown delivery id', async () => {
+    const { url, ackToken } = await startWithBooking();
+
+    const response = await ack(url, 'no-such-delivery', `Bearer ${ackToken}`);
+
+    expect(response.status).toBe(404);
+    expect(await errorCode(response)).toBe('DELIVERY_NOT_FOUND');
+  });
+});
+
+describe('GET /admin/deliveries', () => {
+  it('lists every delivery with a summary, and never the token, the code or the guest', async () => {
+    const { url, onDisk } = await startService();
+    await postJson(`${url}/bookings`, ANA);
+    await postJson(`${url}/bookings`, { ...ANA, reservationId: 'R2' });
+    const [first, second] = await onDisk();
+    await ack(url, first!.delivery.deliveryId, `Bearer ${first!.delivery.ackToken}`);
+
+    const text = await (await fetch(`${url}/admin/deliveries`)).text();
+    const overview = JSON.parse(text) as { summary: { oldestPendingAgeMs: number } };
+
+    expect(overview).toEqual({
+      deliveries: [
+        {
+          bookingId: first?.bookingId,
+          reservationId: 'R123',
+          deliveryId: first?.delivery.deliveryId,
+          status: 'acknowledged',
+          attempts: 0,
+          acknowledgedAt: expect.any(String),
+          needsAttention: false,
+        },
+        {
+          bookingId: second?.bookingId,
+          reservationId: 'R2',
+          deliveryId: second?.delivery.deliveryId,
+          status: 'pending',
+          attempts: 0,
+          acknowledgedAt: null,
+          needsAttention: false,
+        },
+      ],
+      summary: { pending: 1, acknowledged: 1, oldestPendingAgeMs: expect.any(Number) },
+    });
+    expect(overview.summary.oldestPendingAgeMs).toBeGreaterThanOrEqual(0);
+    for (const secret of [first!.delivery.ackToken, first!.confirmationCode, 'ana@example.com']) {
+      expect(text).not.toContain(secret);
+    }
+  });
+});
 
 describe('GET /docs', () => {
   it('serves Swagger UI and an OpenAPI document that lists every route', async () => {
@@ -187,7 +289,13 @@ describe('GET /docs', () => {
     const openapi = (await (await fetch(`${url}/docs/json`)).json()) as { paths: object };
 
     expect(ui.status).toBe(200);
-    expect(Object.keys(openapi.paths).sort()).toEqual(['/bookings', '/health', '/{code}']);
+    expect(Object.keys(openapi.paths).sort()).toEqual([
+      '/admin/deliveries',
+      '/bookings',
+      '/deliveries/{deliveryId}/ack',
+      '/health',
+      '/{code}',
+    ]);
   });
 });
 
