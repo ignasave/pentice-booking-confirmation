@@ -26,3 +26,9 @@ export const BookingNotFound = createError(
   'No booking has that confirmation code',
   404,
 );
+export const Unauthorized = createError(
+  'UNAUTHORIZED',
+  'A valid ack token is required as a Bearer credential',
+  401,
+);
+export const DeliveryNotFound = createError('DELIVERY_NOT_FOUND', 'No delivery has that id', 404);

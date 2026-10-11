@@ -30,12 +30,16 @@ export const postJson = (url: string, body: unknown) =>
 export const readJsonFile = async <T>(path: string): Promise<T> =>
   JSON.parse(await readFile(path, 'utf8')) as T;
 
-/** A booking service on a free loopback port. */
+/** A booking service on a free loopback port, with retries a test can watch. */
 export const bookingConfig = (DATA_DIR: string, overrides: Partial<Config> = {}): Config => ({
   PORT: 0,
   HOST: '127.0.0.1',
   DATA_DIR,
   CODE_MAX_ATTEMPTS: 10,
+  BACKOFF_BASE_MS: 10,
+  BACKOFF_CAP_MS: 40,
+  DELIVERY_TIMEOUT_MS: 2_000,
+  ATTENTION_THRESHOLD: 10,
   ...overrides,
 });
 

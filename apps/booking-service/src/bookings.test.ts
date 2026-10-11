@@ -1,8 +1,15 @@
 import { mkdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { makeTempDir, readJsonFile } from '../../../tests/helpers';
-import { createBooking, openBookingStore, randomCode } from './bookings';
+import {
+  acknowledgeDelivery,
+  backoffDelayMs,
+  countAttempt,
+  createBooking,
+  openBookingStore,
+  randomCode,
+} from './bookings';
 import type { Booking } from './bookings';
 
 const ANA = { reservationId: 'R123', guest: 'ana@example.com' };
@@ -23,6 +30,7 @@ async function openStore() {
 /** Hands out `codes` in order. */
 const codesInOrder = (...codes: string[]) => vi.fn(() => codes.shift() ?? 'zzzzz');
 
+afterEach(() => vi.restoreAllMocks());
 describe('confirmation codes', () => {
   it('are 5 characters of [a-z0-9]', () => {
     for (let i = 0; i < 1_000; i += 1) expect(randomCode()).toMatch(/^[a-z0-9]{5}$/);
@@ -110,5 +118,69 @@ describe('createBooking', () => {
 
     expect((await createBooking(store, { ...ANA, reservationId: 'R2' }, 10)).created).toBe(true);
     expect((await onDisk()).map((b) => b.reservationId)).toEqual(['R123', 'R2']);
+  });
+});
+describe('acknowledgeDelivery', () => {
+  it('marks the delivery acknowledged; a repeat keeps the first time and writes nothing', async () => {
+    const { store, onDisk, inode } = await openStore();
+    const { delivery } = (await createBooking(store, ANA, 10)).booking;
+
+    await acknowledgeDelivery(store, delivery.deliveryId, delivery.ackToken);
+    const [acknowledged] = await onDisk();
+    const before = await inode();
+    await acknowledgeDelivery(store, delivery.deliveryId, delivery.ackToken);
+
+    expect(acknowledged?.delivery).toMatchObject({ status: 'acknowledged' });
+    expect(acknowledged?.delivery.acknowledgedAt).toEqual(expect.any(String));
+    expect(await onDisk()).toEqual([acknowledged]);
+    expect(await inode()).toBe(before);
+  });
+});
+
+describe('countAttempt', () => {
+  it('saves one more attempt, and the needsAttention flag from the threshold on', async () => {
+    const { store, onDisk } = await openStore();
+    const { bookingId } = (await createBooking(store, ANA, 10)).booking;
+
+    const first = await countAttempt(store, bookingId, 2);
+    const second = await countAttempt(store, bookingId, 2);
+
+    expect(first?.delivery).toMatchObject({ attempts: 1, needsAttention: false });
+    expect(second?.delivery).toMatchObject({ attempts: 2, needsAttention: true });
+    expect(await onDisk()).toEqual([second]);
+  });
+
+  it('returns nothing and writes nothing for an acknowledged or unknown booking', async () => {
+    const { store, inode } = await openStore();
+    const { bookingId, delivery } = (await createBooking(store, ANA, 10)).booking;
+    await acknowledgeDelivery(store, delivery.deliveryId, delivery.ackToken);
+    const before = await inode();
+
+    expect(await countAttempt(store, bookingId, 10)).toBeUndefined();
+    expect(await countAttempt(store, 'no-such-booking', 10)).toBeUndefined();
+    expect(await inode()).toBe(before);
+  });
+});
+
+describe('backoffDelayMs', () => {
+  it('stays within [0, min(cap, base * 2^attempts)) for every attempt count', () => {
+    for (const attempts of [0, 1, 2, 5, 10, 50, 5_000]) {
+      const window = Math.min(30_000, 1_000 * 2 ** attempts);
+      for (let i = 0; i < 200; i += 1) {
+        const delay = backoffDelayMs(attempts, 1_000, 30_000);
+        expect(delay).toBeGreaterThanOrEqual(0);
+        expect(delay).toBeLessThan(window);
+        expect(Number.isInteger(delay)).toBe(true);
+      }
+    }
+  });
+
+  it('doubles the window with every attempt until the cap', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.999999);
+    const longest = [0, 1, 2, 3, 4, 5, 6].map((attempts) =>
+      backoffDelayMs(attempts, 1_000, 30_000),
+    );
+
+    expect(longest).toEqual([999, 1_999, 3_999, 7_999, 15_999, 29_999, 29_999]);
   });
 });

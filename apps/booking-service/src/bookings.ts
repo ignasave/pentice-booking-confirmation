@@ -1,10 +1,16 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { join } from 'node:path';
 import { FastifyError } from '@fastify/error';
 import { customAlphabet } from 'nanoid';
 import { openJsonFileStore, UNCHANGED } from '@pentice/shared/json-file-store';
 import type { JsonFileStore } from '@pentice/shared/json-file-store';
-import { CodeSpaceExhausted, PersistenceUnavailable, ReservationConflict } from './errors';
+import {
+  CodeSpaceExhausted,
+  DeliveryNotFound,
+  PersistenceUnavailable,
+  ReservationConflict,
+  Unauthorized,
+} from './errors';
 
 interface Delivery {
   /** The same on every attempt; the guest stores a confirmation once per `deliveryId`. */
@@ -45,6 +51,11 @@ export function openBookingStore(dataDir: string): Promise<BookingStore> {
     schemaVersion: 1,
     bookings: [],
   });
+}
+
+/** Exponential backoff with full jitter: a random delay below `min(capMs, baseMs * 2^attempts)`. */
+export function backoffDelayMs(attempts: number, baseMs: number, capMs: number): number {
+  return Math.floor(Math.random() * Math.min(capMs, baseMs * 2 ** attempts));
 }
 
 /**
@@ -121,4 +132,65 @@ export async function createBooking(
 
 export async function findByCode(store: BookingStore, code: string): Promise<Booking | undefined> {
   return (await store.read()).bookings.find((b) => b.confirmationCode === code);
+}
+
+export async function listBookings(store: BookingStore): Promise<Booking[]> {
+  return (await store.read()).bookings;
+}
+
+// `timingSafeEqual` throws on inputs of different lengths, so the length is compared first.
+// That reveals only the length, which is the same for every token.
+function sameToken(presented: string, expected: string): boolean {
+  const a = Buffer.from(presented);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/**
+ * Ends a delivery for whoever holds its ack token. This is the only place a delivery
+ * becomes `acknowledged`. Repeating it succeeds and writes nothing.
+ */
+export async function acknowledgeDelivery(
+  store: BookingStore,
+  deliveryId: string,
+  presentedToken: string | undefined,
+): Promise<void> {
+  // Before the lookup, so a request without a token cannot learn whether a delivery exists.
+  if (presentedToken === undefined) throw new Unauthorized();
+
+  await update(store, (state) => {
+    const delivery = state.bookings.find((b) => b.delivery.deliveryId === deliveryId)?.delivery;
+    if (!delivery) throw new DeliveryNotFound();
+    if (!sameToken(presentedToken, delivery.ackToken)) throw new Unauthorized();
+    if (delivery.status === 'acknowledged') return UNCHANGED;
+    delivery.status = 'acknowledged';
+    delivery.acknowledgedAt = new Date().toISOString();
+    return state;
+  });
+}
+
+/**
+ * Counts one delivery attempt, before its request is sent, and returns the booking to send.
+ * Returns nothing and writes nothing when the booking is unknown or already acknowledged:
+ * that is where retrying ends.
+ */
+export async function countAttempt(
+  store: BookingStore,
+  bookingId: string,
+  attentionThreshold: number,
+): Promise<Booking | undefined> {
+  let counted: Booking | undefined;
+
+  // The status check and the count share one update, so an ACK is either saved before it,
+  // and nothing is counted, or after it, and the ACK still wins.
+  await update(store, (state) => {
+    const booking = state.bookings.find((b) => b.bookingId === bookingId);
+    if (!booking || booking.delivery.status === 'acknowledged') return UNCHANGED;
+    booking.delivery.attempts += 1;
+    // Never cleared: the flag records that the threshold was crossed.
+    booking.delivery.needsAttention ||= booking.delivery.attempts >= attentionThreshold;
+    counted = booking;
+    return state;
+  });
+  return counted;
 }
