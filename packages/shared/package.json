@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./create-app": "./src/create-app.ts",
+    "./delivery-payload": "./src/delivery-payload.ts",
     "./json-file-store": "./src/json-file-store.ts"
   },
   "scripts": {
